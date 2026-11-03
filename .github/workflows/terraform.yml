@@ -1,0 +1,95 @@
+name: terraform
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cloud-soc-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.17.1"
+  CHECKOV_VERSION: "3.4.0"
+  ARM_USE_OIDC: "true"
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  scan:
+    name: Security scan (Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Checkov
+        run: pip install "checkov==${CHECKOV_VERSION}"
+      - name: Scan all Terraform
+        run: checkov -d . --framework terraform --quiet --compact
+
+  plan:
+    name: Plan (read-only)
+    if: github.event_name == 'pull_request'
+    needs: scan
+    runs-on: ubuntu-latest
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PLAN }}
+    defaults:
+      run:
+        working-directory: soc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: Format check
+        run: terraform fmt -check -recursive
+      - name: Init
+        run: terraform init -input=false -backend-config="storage_account_name=${{ secrets.STATE_SA }}"
+      - name: Validate
+        run: terraform validate
+      - name: Plan
+        run: set -o pipefail; terraform plan -input=false -no-color -lock-timeout=5m | tee plan.txt
+      - name: Add plan to job summary
+        if: always()
+        run: |
+          {
+            echo '### Terraform plan'
+            echo '```'
+            tail -n 60 plan.txt 2>/dev/null || echo "plan did not run"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: Apply (main only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: scan
+    runs-on: ubuntu-latest
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_APPLY }}
+    defaults:
+      run:
+        working-directory: soc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: Init
+        run: terraform init -input=false -backend-config="storage_account_name=${{ secrets.STATE_SA }}"
+      - name: Plan
+        run: terraform plan -input=false -no-color -lock-timeout=5m -out=tfplan
+      - name: Apply exactly what was planned
+        run: terraform apply -input=false -no-color tfplan
