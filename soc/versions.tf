@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "~> 4.42"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 
   # storage_account_name is passed at init time
