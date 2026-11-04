@@ -64,7 +64,7 @@ resource "azurerm_windows_virtual_machine" "endpoint" {
   computer_name              = "soc-endpoint"
   resource_group_name        = data.azurerm_log_analytics_workspace.core.resource_group_name
   location                   = data.azurerm_log_analytics_workspace.core.location
-  size                       = "Standard_B2s"
+  size                       = var.endpoint_vm_size
   admin_username             = "socadmin"
   admin_password             = random_password.endpoint_admin.result
   network_interface_ids      = [azurerm_network_interface.endpoint.id]
